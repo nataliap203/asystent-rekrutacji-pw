@@ -14,7 +14,10 @@ Metryki retrievalu (liczone tylko dla pytań z niepustym `source_ids`):
   strategii chunkingu recall@k ma sens tylko obok tego budżetu (większe chunki = wyższy recall).
 
 Metryki generacji (`--generate`):
-- refusal_ok: model odpowiedział na pytanie z dokumentów / odmówił na pytanie spoza nich,
+- refusal_ok: zachowanie zgodne z `expected` ("answer": cytuje fragmenty, "refuse": niczego nie
+  cytuje, "redirect": wszystkie `expected_urls` są w odpowiedzi),
+- url_ok: odsetek pytań, w których wszystkie `expected_urls` występują w tekście odpowiedzi
+  (podciąg; liczone tylko dla pytań z `expected_urls`),
 - citation_hit: wśród cytowanych chunków jest oczekiwane źródło,
 - inline_cited: odpowiedź ma w tekście znaczniki [n] przy twierdzeniach,
 - latency_s: czas retrieval + generacja.
@@ -42,6 +45,8 @@ class GoldItem:
     source_ids: list[str]
     tags: list[str] = field(default_factory=list)
     needs_review: bool = False
+    expected: str = "answer"  # "answer" | "refuse" | "redirect"
+    expected_urls: list[str] = field(default_factory=list)
 
 
 def load_golden(path: Path) -> list[GoldItem]:
@@ -70,6 +75,32 @@ def reciprocal_rank(retrieved: list[list[str]], relevant: list[str]) -> float:
     return 0.0
 
 
+def urls_in_answer(answer: str, urls: list[str]) -> bool:
+    """Czy KAŻDY oczekiwany adres występuje w tekście odpowiedzi (prosty test na podciąg).
+
+    Nie rozróżniamy wielkości liter ani końcowego ukośnika. Zmyślony adres = brak oczekiwanego.
+    """
+    text = answer.lower()
+    return all(url.lower().rstrip("/") in text for url in urls)
+
+
+def behavior_ok(item: GoldItem, answered_from_context: bool, url_ok: bool | None) -> bool:
+    """Czy zachowanie modelu zgadza się z `item.expected`.
+
+    - "answer": model cytuje fragmenty kontekstu,
+    - "refuse": model nic nie cytuje,
+    - "redirect": wszystkie `expected_urls` są w odpowiedzi (`url_ok`); gdy pytanie nie ma
+      adresów (odesłanie do kontaktu), wystarczy, że model oparł się na kontekście.
+    """
+    if item.expected == "answer":
+        return answered_from_context
+    if item.expected == "refuse":
+        return not answered_from_context
+    if item.expected == "redirect":
+        return answered_from_context if url_ok is None else url_ok
+    raise ValueError(f"Nieznane expected={item.expected!r} w pytaniu {item.id}. Dozwolone: answer, refuse, redirect.")
+
+
 # --------------------------------------------------------------------------- przebieg
 
 
@@ -84,18 +115,21 @@ def evaluate(
     max_k = max(ks)
     rows: list[dict[str, Any]] = []
     for item in items:
-        row: dict[str, Any] = {"id": item.id, "question": item.question, "tags": item.tags}
+        row: dict[str, Any] = {"id": item.id, "question": item.question, "tags": item.tags, "expected": item.expected}
         hits: list[Hit] = retrieve(item.question, settings, k=max_k, collection=collection)
         if generate:
             result = answer_question(item.question, settings, k=settings.top_k, collection=collection)
             cited = {sid for h in result.cited_hits() for sid in h.source_ids}
+            url_ok = urls_in_answer(result.answer.answer, item.expected_urls) if item.expected_urls else None
             row |= {
                 "answer": result.answer.answer,
                 "citations": result.cited_numbers,
                 "latency_s": result.retrieve_s + result.generate_s,
                 "structured_mode": result.mode,
-                # Odmowa poprawna, gdy pytanie jest spoza dokumentów (pusty source_ids).
-                "refusal_ok": result.answered_from_context == bool(item.source_ids),
+                # Zachowanie zgodne z `expected` (answer / refuse / redirect), nie z pustym source_ids.
+                "refusal_ok": behavior_ok(item, result.answered_from_context, url_ok),
+                # Tylko pytania z expected_urls: czy wszystkie adresy są w tekście odpowiedzi.
+                "url_ok": url_ok,
                 "citation_hit": bool(cited & set(item.source_ids)) if item.source_ids else None,
                 # Czy odpowiedź ma znaczniki [n] w tekście (tylko dla pytań z odpowiedzią).
                 "inline_cited": result.has_inline_citations if item.source_ids else None,
@@ -107,7 +141,7 @@ def evaluate(
                 row[f"recall@{k}"] = recall_at_k(retrieved, item.source_ids, k)
             row["mrr"] = reciprocal_rank(retrieved, item.source_ids)
         rows.append(row)
-    return {"rows": rows, "summary": summarize(rows, ks)}
+    return {"rows": rows, "summary": summarize(rows, ks), "by_expected": summarize_by_expected(rows, ks)}
 
 
 def _mean(rows: list[dict[str, Any]], key: str) -> float | None:
@@ -118,10 +152,22 @@ def _mean(rows: list[dict[str, Any]], key: str) -> float | None:
 def summarize(rows: list[dict[str, Any]], ks: tuple[int, ...]) -> dict[str, Any]:
     """Średnie metryk po wszystkich pytaniach."""
     summary: dict[str, Any] = {"questions": len(rows)}
-    keys = ["mrr", "ctx_chars", "refusal_ok", "citation_hit", "inline_cited", "latency_s"]
+    keys = ["mrr", "ctx_chars", "refusal_ok", "url_ok", "citation_hit", "inline_cited", "latency_s"]
     for key in [*(f"recall@{k}" for k in ks), *keys]:
         summary[key] = _mean(rows, key)
     return summary
+
+
+def summarize_by_expected(rows: list[dict[str, Any]], ks: tuple[int, ...]) -> dict[str, dict[str, Any]]:
+    """Osobne średnie dla każdej wartości `expected` (answer / redirect / refuse).
+
+    Bez tego np. 15 odesłań i 95 zwykłych pytań zlałoby się w jedną liczbę `refusal_ok`,
+    choć każda grupa mierzy co innego.
+    """
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        groups.setdefault(row.get("expected", "answer"), []).append(row)
+    return {name: summarize(group, ks) for name, group in sorted(groups.items())}
 
 
 def to_markdown(results: dict[str, Any], title: str) -> str:
@@ -135,6 +181,11 @@ def to_markdown(results: dict[str, Any], title: str) -> str:
         lines.append(f"| {r['id']} | {r['question']} | {values} |")
     means = " | ".join(f"**{format_cell(summary[c])}**" for c in cols)
     lines.append(f"| **średnia** | {summary['questions']} pytań | {means} |")
+    groups = results.get("by_expected", {})
+    if len(groups) > 1:  # osobna średnia dla każdego expected, tylko gdy w zbiorze jest ich kilka
+        for name, group in groups.items():
+            values = " | ".join(f"**{format_cell(group[c])}**" for c in cols)
+            lines.append(f"| **średnia: {name}** | {group['questions']} pytań | {values} |")
     return "\n".join(lines) + "\n"
 
 

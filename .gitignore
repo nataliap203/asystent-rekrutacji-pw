@@ -7,7 +7,7 @@ __pycache__/
 .qdrant/
 .cache/
 !data/raw/manifest.json
-eval/results/*
+# eval/results/*
 !eval/results/.gitkeep
 .DS_Store
 # Notatki prowadzącego (nie dla studentów)

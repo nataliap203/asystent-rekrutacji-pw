@@ -86,6 +86,7 @@ SHORT_HEADERS = {
     "mrr": "MRR",
     "ctx_chars": "ctx",
     "refusal_ok": "odm.",
+    "url_ok": "URL",
     "citation_hit": "cyt.",
     "inline_cited": "[n]",
     "latency_s": "t[s]",
@@ -118,10 +119,18 @@ def cmd_eval(args: argparse.Namespace) -> None:
         f"{summary['questions']} pytań",
         *(format_cell(summary.get(c)) for c in metric_cols),
     )
+    groups = results.get("by_expected", {})
+    if len(groups) > 1:  # osobna średnia dla każdego expected (answer / redirect / refuse)
+        for name, group in groups.items():
+            table.add_row(
+                escape(f"  {name}"),
+                f"{group['questions']} pytań",
+                *(format_cell(group.get(c)) for c in metric_cols),
+            )
     console.print(table)
     legend = "R@k = recall@k · MRR = mean reciprocal rank · ctx = znaki kontekstu w top-k"
     if args.generate:
-        legend += " · odm. = poprawna odmowa/odpowiedź · cyt. = cytat z oczekiwanego źródła · [n] = znaczniki źródeł w tekście"
+        legend += " · odm. = zachowanie zgodne z expected · URL = oczekiwane adresy w odpowiedzi · cyt. = cytat z oczekiwanego źródła · [n] = znaczniki źródeł w tekście"
     console.print(f"[dim]{escape(legend)}[/]")
 
     label = f"{Path(args.golden).stem}_{args.collection or settings.collection}"
@@ -171,7 +180,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_agent)
 
     p = sub.add_parser("eval", help="ewaluacja na złotym zbiorze")
-    p.add_argument("--golden", default="eval/golden_sample.jsonl")
+    p.add_argument("--golden", default="eval/golden.jsonl")
     p.add_argument("--generate", action="store_true", help="oceniaj też odpowiedzi (wolniej)")
     p.add_argument("--collection")
     p.set_defaults(func=cmd_eval)

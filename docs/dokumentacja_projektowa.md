@@ -55,6 +55,9 @@ System ma za zadanie:
 **Załączniki i wzory oświadczeń:**
 * `Upoważnienie 2026_2027.pdf` (dla różnych stopni połączone w jeden kontekst).
 * `Zgoda rodziców na podjęcie studiów przez osobę niepełnoletnią. Rekrutacja PW 2026_2027.pdf` - dotyczy studiów I stopnia (stacjonarnych i niestacjonarnych).
+
+**Kontakty i odesłania (plik przygotowany ręcznie):**
+- `Kontakty_i_odeslania.md` - zestawienie adresów stron i danych kontaktowych, do których system odsyła w sprawach z sekcji 2.2 (Wydział Architektury, domy studenckie, stypendia, Regulamin Studiów, dziekanaty, Biuro ds. Przyjęć na Studia i problemy z kontem IRK). Dane kontaktowe wydziałów i BPS pochodzą z rozdziału „Dane teleadresowe” pliku `Studia stacjonarne I stopnia oraz jednolite studia magisterskie 2026_2027.pdf`, a adresy stron sprawdzono ręcznie (12 XI 2026). Dzięki temu odesłanie opiera się na dokumencie w bazie wiedzy, a nie na adresie zapamiętanym przez model.
 ### 2.2. Dane wyłączone z projektu (Out-of-scope)
 System ma za zadanie zidentyfikować poniższe intencje, przerwać proces wnioskowania (odmówić własnej odpowiedzi) i skierować użytkownika do odpowiedniego miejsca:
 * **Rekrutacja na Wydział Architektury PW** - proces oparty na specjalistycznych sprawdzianach uzdolnień plastycznych; system odeśle kandydata na stronę: https://www.arch.pw.edu.pl/Kandydaci.
@@ -85,6 +88,12 @@ System zostanie oceniony na podstawie rygorystycznego pomiaru **przed/po** (E1 v
 	* *Pytania obliczeniowe (I stopień):* Np. "Mam 80% z rozszerzonej matematyki i 60% z fizyki. Ile będę mieć punktów na Informatykę Stosowaną"
 	* *Pytania złożone:* Wymagające łączenia wiedzy z różnych dokumentów. Np. "Mam 80% z rozszerzonej matematyki i 60% z fizyki. Czy mam szansę na stacjonarną Informatykę Stosowaną?"
 	* *Pytania spoza zakresu (Guardrails):* Np. "Jak wygląda sprawdzian predyspozycji na Architekturę?" (Oczekiwany wynik: Odmowa i link).
+* **Oczekiwane zachowanie (pole `expected` w Golden Secie):** każde pytanie ma jawnie przypisane jedno z trzech zachowań (domyślnie `answer`), a wynik `refusal_ok` jest liczony według niego, a nie na podstawie pustej listy źródeł:
+	* `answer` - odpowiedź z dokumentów; poprawna, gdy model cytuje fragmenty kontekstu,
+	* `redirect` - pytanie poza zakresem, ale baza wiedzy zawiera, dokąd odesłać (`Kontakty_i_odeslania.md`); poprawne, gdy w odpowiedzi są wszystkie adresy z pola `expected_urls` (prosty test na podciąg, metryka `url_ok`, wyłapuje też zmyślone linki),
+	* `refuse` - pytanie bez pokrycia w dokumentach i bez odesłania (np. inne uczelnie, doradztwo zawodowe); poprawne, gdy model niczego nie cytuje.
+
+  Średnie wyników są raportowane osobno dla każdej wartości `expected`.
 ---
 ## 5. Harmonogram
 #### Etap E1: System bazowy (Termin: 16 XI 2026)

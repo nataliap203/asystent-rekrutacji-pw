@@ -1,7 +1,7 @@
 # Cienkie wrappery na `uv run rag ...` - na Windowsie bez make wpisz komendę z prawej strony.
 # Dodatkowe argumenty: make ingest ARGS="--chunking fixed --recreate"
 
-.PHONY: help setup pull up down check ingest ask agent eval test lint reset-cache
+.PHONY: help setup pull up down check ingest ask agent eval golden test lint reset-cache
 
 DATA ?=
 Q ?=
@@ -39,6 +39,10 @@ agent: ## agent z tool callingiem (interaktywnie albo Q="...")
 
 eval: ## recall@k i MRR na złotym zbiorze (ARGS=--generate ocenia też odpowiedzi)
 	uv run rag eval $(ARGS)
+
+golden: ## skleja eval/golden_*.jsonl w eval/golden.jsonl (domyślny zbiór dla make eval)
+	awk 1 eval/golden_*.jsonl > eval/golden.jsonl
+	@echo "Zapisano eval/golden.jsonl: $$(wc -l < eval/golden.jsonl | tr -d ' ') pytań"
 
 reset-cache: ## wykryj tryb structured output od nowa (np. po aktualizacji Ollamy)
 	uv run rag reset-cache

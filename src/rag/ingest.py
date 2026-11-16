@@ -1,11 +1,13 @@
-"""Ingest: wczytanie plików PDF/MD/TXT → normalizacja → chunking → embedding → Qdrant.
+"""Ingest: wczytanie plików PDF/MD/TXT/CSV → normalizacja → chunking → embedding → Qdrant.
 
 Każdy loader zwraca listę `Block` - fragmentów dokumentu z metadanymi (strona dla PDF,
-sekcja dla Markdowna). Chunking dzieli bloki dalej, zachowując ich metadane.
+sekcja dla Markdowna, wiersz dla CSV). Chunking dzieli bloki dalej, zachowując ich metadane.
 """
 
 from __future__ import annotations
 
+import csv
+import io
 import logging
 import re
 import time
@@ -23,7 +25,7 @@ from rag.store import ensure_collection, get_client, upsert_chunks
 
 log = logging.getLogger(__name__)
 
-SUPPORTED_SUFFIXES = (".pdf", ".md", ".txt")
+SUPPORTED_SUFFIXES = (".pdf", ".md", ".txt", ".csv")
 
 
 # --------------------------------------------------------------------------- loaders
@@ -61,9 +63,55 @@ def load_text(path: Path) -> list[Block]:
     return [Block(path.read_text(encoding="utf-8"), {"source": path.name})]
 
 
+def load_csv(path: Path) -> list[Block]:
+    """Jeden blok na wiersz, dla DOWOLNEGO pliku CSV (nazwy kolumn nie mają znaczenia).
+
+    Reguły (celowo proste):
+    - pierwszy wiersz to nagłówek; separator `,` `;` albo tabulator wykrywamy automatycznie,
+    - tekst bloku: pary „nagłówek: wartość” ze wszystkich kolumn (embedding samego „170” nic
+      nie mówi, a z nazwami pól wiersz jest samodzielnym faktem),
+    - identyfikator (`section`) = wartości wszystkich kolumn POZA OSTATNIĄ połączone przecinkiem
+      (ostatnia kolumna to „wartość” faktu); dla pliku z jedną kolumną - jej wartość.
+      Np. wiersz `Wydział Elektryczny,Informatyka stosowana,170` →
+      `Progi_punktowe_PW_2025_2026.csv#Wydział Elektryczny,Informatyka stosowana`.
+    Chunker dzieli każdy blok osobno, więc wiersze się nie zlewają.
+    """
+    text = path.read_text(encoding="utf-8-sig")
+    try:
+        dialect: type[csv.Dialect] | csv.Dialect = csv.Sniffer().sniff(text[:2048], delimiters=",;\t")
+    except csv.Error:
+        dialect = csv.excel
+    reader = csv.reader(io.StringIO(text, newline=""), dialect)
+    header = [h.strip() for h in next(reader, [])]
+    if not any(header):
+        raise ValueError(f"{path.name}: pusty plik albo brak nagłówka. Pierwszy wiersz musi zawierać nazwy kolumn.")
+    title = path.stem.replace("_", " ")
+    blocks: list[Block] = []
+    seen: set[str] = set()
+    for row in reader:
+        if not any(cell.strip() for cell in row):
+            continue  # pusty wiersz
+        if len(row) != len(header):
+            raise ValueError(
+                f"{path.name}, linia {reader.line_num}: {len(row)} kolumn zamiast {len(header)}. "
+                "Popraw wiersz (tekst z przecinkiem ujmij w cudzysłów)."
+            )
+        values = [cell.strip() for cell in row]
+        key = ",".join(values[:-1] or values)
+        if key in seen:
+            raise ValueError(
+                f"{path.name}, linia {reader.line_num}: powtórzony identyfikator „{key}”. Identyfikator to wartości "
+                "wszystkich kolumn poza ostatnią - dodaj kolumnę, która odróżnia wiersze."
+            )
+        seen.add(key)
+        facts = ". ".join(f"{name.replace('_', ' ')}: {value}" for name, value in zip(header, values, strict=True) if value)
+        blocks.append(Block(f"{title}. {facts}.", {"source": path.name, "section": key}))
+    return blocks
+
+
 def load_file(path: Path) -> list[Block]:
     """Wybiera loader po rozszerzeniu pliku."""
-    loaders = {".pdf": load_pdf, ".md": load_markdown, ".txt": load_text}
+    loaders = {".pdf": load_pdf, ".md": load_markdown, ".txt": load_text, ".csv": load_csv}
     return loaders[path.suffix.lower()](path)
 
 
@@ -87,7 +135,8 @@ def source_ids_for(metadata: dict[str, Any]) -> list[str]:
     """Stabilne identyfikatory źródła, NIEZALEŻNE od strategii chunkingu.
 
     Złoty zbiór (eval/) odwołuje się do nich, więc recall@k można porównywać między
-    strategiami chunkingu. Format: `plik.pdf#p3`, `plik.md#Nazwa sekcji`, `plik.txt`.
+    strategiami chunkingu. Format: `plik.pdf#p3`, `plik.md#Nazwa sekcji`, `plik.txt`,
+    `plik.csv#Wydział,Kierunek` (jeden identyfikator na wiersz tabeli).
     """
     source = metadata["source"]
     if "page" in metadata:
