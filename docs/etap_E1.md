@@ -38,7 +38,7 @@ Pełna tabela i lista pytań: [wyniki oceny ręcznej](../eval/results/20261116-1
 ## Wnioski
 
 1. **Główny problem to retrieval, nie generowanie.** recall@5 wynosi tylko 0,30, więc w większości przypadków właściwego fragmentu nie ma w kontekście. Model wtedy odpowiada „w dokumentach nie ma informacji” (61 zbędnych odmów na 100 pytań `answer`).
-2. **Pytania obliczeniowe: 0/20, ale nie przez halucynacje.** Model nie podaje błędnych wyników, tylko we wszystkich 20 przypadkach odmawia. Wzory i wagi są trudne do znalezienia w chunkach. Wniosek do E3: kalkulator musi mieć wagi i wzory poza retrievalem, a nie tylko w narzędziu.
+2. **Pytania obliczeniowe: 0/20, ale nie przez halucynacje.** Model nie podaje błędnych wyników, tylko we wszystkich 20 przypadkach odmawia. Wzory i wagi są trudne do znalezienia w chunkach. Wniosek do E3: narzędzie kalkulatora powinno mieć wagi przedmiotowe i wzory zapisane na stałe (w kodzie lub w danych strukturalnych), zamiast szukać ich w chunkach przez retrieval.
 3. **Metryka `refusal_ok` zawyża jakość.** W 53 pytaniach `refusal_ok` = ✓, a ocena ręczna to porażka, bo odmowa z doklejonym numerem źródła liczy się jako cytowanie.
 4. **Pytania spoza zakresu:** 5 z 5 pytań `refuse` poprawnie, ale tylko 2 z 15 `redirect`. Model zwykle nie podaje linku ani kontaktu z `Kontakty_i_odeslania.md` (`url_ok` = 0,08). To cel dla E2 (prompt i metadane).
 5. **Błędne odpowiedzi merytoryczne** (np. pomylone terminy zapisów w s8, s9, a20 albo nieaktualny wzór PK w s3) wynikają głównie z mieszania fragmentów z różnych stopni i form studiów. To cel dla E2 (metadane rozróżniające stopień i formę).
